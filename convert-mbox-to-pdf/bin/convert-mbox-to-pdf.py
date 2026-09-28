@@ -1064,44 +1064,6 @@ def process_html(html: str) -> str:
 
     return process_plain_text_blockquotes(html)
 
-# def process_html(html: str) -> str:
-#     if not html:
-#         return ""
-#     html = re.sub(r"=\r?\n", "", html)
-#     html = re.sub(r"=\s+$", "", html, flags=re.MULTILINE)
-#     html = re.sub(r"=([0-9A-Fa-f]{2})", lambda m: chr(int(m.group(1), 16)), html)
-#     html = re.sub(r"<br\s*/?>", "<br>", html, flags=re.IGNORECASE)
-#     html = re.sub(r"\s*<br>\s*$", "<br>", html, flags=re.IGNORECASE | re.MULTILINE)
-#     html = re.sub(r"^\s*<br>\s*", "", html, flags=re.IGNORECASE | re.MULTILINE)
-#     html = re.sub(r"<br>", "\n", html, flags=re.IGNORECASE)
-#     html = re.sub(r"<br>\s*=20\s*<br>", "\n\n", html, flags=re.IGNORECASE)
-#     html = re.sub(r"</p>", "\n\n", html, flags=re.IGNORECASE)
-#     html = re.sub(r"<blockquote[^>]*>", "\n__BLOCKQUOTE_START__", html, flags=re.IGNORECASE)
-#     html = re.sub(r"</blockquote>", "\n__BLOCKQUOTE_END__", html, flags=re.IGNORECASE)
-#     html = re.sub(r"</div>", "\n", html, flags=re.IGNORECASE)
-#     html = re.sub(r"<div[^>]*>", "\n", html, flags=re.IGNORECASE)
-#     html = re.sub(r"</h[1-6]>", "\n\n", html, flags=re.IGNORECASE)
-#     html = re.sub(r"<h[1-6][^>]*>", "\n", html, flags=re.IGNORECASE)
-#     html = re.sub(r"<head[^>]*>.*?</head>", "", html, flags=re.IGNORECASE | re.DOTALL)
-#     html = re.sub(r"<style[^>]*>.*?</style>", "", html, flags=re.IGNORECASE | re.DOTALL)
-#     html = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.IGNORECASE | re.DOTALL)
-#     html = re.sub(
-#         r'<a[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
-#         r"\2 (\1)", html, flags=re.IGNORECASE | re.DOTALL,
-#     )
-#     html = re.sub(r"<[^>]+>", "", html)
-#     html = re.sub(r"&#(\d+);", lambda m: chr(int(m.group(1))), html)
-#     for old, new in (("&quot;", '"'), ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"), ("&nbsp;", " ")):
-#         html = html.replace(old, new)
-#     html = html.replace("\r\n", "\n")
-#     html = re.sub(r"\n+[^\S\n\r]*\n+[^\S\n\r]*\n+[^\S\n\r]*\n*", "\n\n", html)
-#     html = html.strip()
-#     html = re.sub(r"[ \t]+", " ", html)
-#     html = re.sub(r"^[ \t]+", "", html, flags=re.MULTILINE)
-#     html = re.sub(r"[ \t]+$", "", html, flags=re.MULTILINE)
-#     return process_plain_text_blockquotes(html)
-
-
 def normalize_name(name: str) -> str:
     if not name:
         return ""
@@ -2230,18 +2192,6 @@ def index_selected(i: int, n: int, clauses: List[Tuple[str, int, int]]) -> bool:
         if kind == "exc" and start <= i <= last:
             selected = False
     return selected
-
-# def parse_selector(sel: str) -> Tuple[int, int, str]:
-#     if re.match(r"^\d+-\d+$", sel):
-#         start, end = map(int, sel.split("-"))
-#         if start > end:
-#             end = start + end
-#         return start, end, str(start)
-#     try:
-#         n = int(sel)
-#         return n, n, sel
-#     except Exception:
-#         return 0, 0, "0"
 
 
 def msg_sort_ts(m: Message) -> float:
