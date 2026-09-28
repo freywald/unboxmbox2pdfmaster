@@ -922,13 +922,15 @@ def clean_text(text: str) -> str:
     text = re.sub(r"[ \t]+", " ", text)
     return text
 
-
 def process_plain_text_blockquotes(text: str) -> str:
     if not text:
         return ""
     result: List[str] = []
     level = 0
     for line in text.split("\n"):
+        if not line.strip():
+            result.append("")
+            continue
         content = line
         new_level = 0
         while re.match(r"^\s*>\s*", content):
@@ -945,6 +947,30 @@ def process_plain_text_blockquotes(text: str) -> str:
         result.append("__BLOCKQUOTE_END__")
         level -= 1
     return "\n".join(result)
+
+#
+# def process_plain_text_blockquotes(text: str) -> str:
+#     if not text:
+#         return ""
+#     result: List[str] = []
+#     level = 0
+#     for line in text.split("\n"):
+#         content = line
+#         new_level = 0
+#         while re.match(r"^\s*>\s*", content):
+#             new_level += 1
+#             content = re.sub(r"^\s*>\s*", "", content, count=1)
+#         while level < new_level:
+#             result.append("__BLOCKQUOTE_START__")
+#             level += 1
+#         while level > new_level:
+#             result.append("__BLOCKQUOTE_END__")
+#             level -= 1
+#         result.append(content)
+#     while level > 0:
+#         result.append("__BLOCKQUOTE_END__")
+#         level -= 1
+#     return "\n".join(result)
 
 
 def handle_text(text: str) -> str:
