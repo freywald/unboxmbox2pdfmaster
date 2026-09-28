@@ -2508,10 +2508,14 @@ def main() -> None:
         log("ERROR", "missing input_files")
         sys.exit(1)
 
+    archive = str(config.get("archive_attachments", False)).lower() in ("1", "true", "yes")
     use_dedup = bool(config.get("use_deduplicated_mbox", False))
     split_big = bool(config.get("split_big_files_on_limit", False))
     output_path = Path(config["output_path"])
     output_filename = config["output_filename"]
+    rundir = make_rundir(output_path)
+    setup_log_files(rundir)
+    archive_root = prepare_archive_root(rundir) if archive else None
 
     if args.list_needle is not None:
         try:
@@ -2561,7 +2565,6 @@ def main() -> None:
         log("INFO", f"--fast level {fast_level}: image_dpi=10, uncompressed PNG")
     prefer_plain_text = bool(config.get("prefer_plain_text", True))
     use_montage = str(config.get("use_montages_for_images", True)).lower() in ("1", "true", "yes")
-    archive = str(config.get("archive_attachments", False)).lower() in ("1", "true", "yes")
     email_to_name = {k.lower(): v for k, v in (config.get("email_to_name") or {}).items()}
 
     layout = make_layout(page_size, image_dpi)
@@ -2590,10 +2593,6 @@ def main() -> None:
         all_messages.extend(load_mbox_messages(mbox_path))
     all_messages.sort(key=msg_sort_ts)
     log("INFO", f"Loaded and sorted {len(all_messages)} emails chronologically")
-
-    rundir = make_rundir(output_path)
-    setup_log_files(rundir)
-    archive_root = prepare_archive_root(rundir) if archive else None
 
     try:
         clauses = parse_selector(args.select_emails)
@@ -2639,8 +2638,6 @@ def main() -> None:
         piece = render_one_email(
             email, layout, page_size, tmp, use_montage, gs, archive, archive_root, font_path,
         )
-        # if render_one_email still takes output_path only for archive, change that
-        # call to pass archive_root — see note below
         if piece is None or not piece.exists():
             failed += 1
             continue
