@@ -25,7 +25,7 @@ from email.message import Message
 from email.parser import BytesParser
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TextIO, Tuple, Set
+from typing import Any, Dict, List, Optional, TextIO, Tuple
 
 from PIL import Image as PILImage
 from pypdf import PdfReader, PdfWriter
@@ -80,7 +80,6 @@ RATIO_COLON = "\u2236"
 BAR_OPTICAL_NUDGE = 0
 TITLE_BAR_TEXT_NUDGE = 3.0      # image / montage / PDF title text; + = lower
 ATTACH_HEADING_RULE_NUDGE = 6.0  # + = rule lower, heading unchanged
-SPLIT_LIMIT_BYTES = 8 * 1024 * 1024 * 1024
 
 CONVERTIBLE = {
     "doc", "docx", "odt", "rtf", "xls", "xlsx", "ods", "csv",
@@ -346,8 +345,10 @@ def apply_archive_mtime(dest: Path, email: ProcessedEmail) -> None:
     os.utime(dest, (ts, ts))
 
 
-def prepare_archive_root(rundir: Path) -> Path:
-    root = rundir / "attachments"
+def prepare_archive_root(output_path: Path) -> Path:
+    root = output_path / "attachments"
+    if root.exists():
+        rotate_existing_path(root)
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -384,56 +385,35 @@ def mtime_stamp(path: Path) -> str:
     return datetime.fromtimestamp(path.stat().st_mtime).strftime("%d-%m-%Y-%H-%M-%S")
 
 
-def run_id_now() -> str:
-    return datetime.now().strftime("%d-%m-%Y-%H-%M-%S")
-
-
-def make_rundir(output_path: Path) -> Path:
-    stamp = run_id_now()
-    parent = output_path / "run"
-    parent.mkdir(parents=True, exist_ok=True)
-    rundir = parent / f"run-{stamp}"
+def rotate_existing_path(path: Path, stamp: Optional[str] = None) -> Optional[Path]:
+    path = Path(path)
+    if not path.exists():
+        return None
+    if stamp is None:
+        stamp = mtime_stamp(path)
+    candidate = path.with_name(f"{path.stem}-{stamp}{path.suffix}")
     i = 1
-    while rundir.exists():
-        rundir = parent / f"run-{stamp}_{i}"
+    while candidate.exists():
+        candidate = path.with_name(f"{path.stem}-{stamp}_{i}{path.suffix}")
         i += 1
-    rundir.mkdir(parents=True, exist_ok=True)
-    log("INFO", f"Run directory: {q(rundir)}")
-    return rundir
+    path.rename(candidate)
+    log("INFO", f"Renamed existing output to: {q(candidate)}")
+    return candidate
 
 
-def link_into_root(output_path: Path, rundir: Path, name: str) -> None:
-    src = rundir / name
-    dest = output_path / name
-    if not src.exists():
-        return
-    if dest.is_symlink():
-        dest.unlink()
-    elif dest.exists():
-        log("WARNING", f"cannot symlink {q(dest)}: real file/dir exists, rundir keeps {q(src)}")
-        return
-    try:
-        dest.symlink_to(src)
-        log("VERBOSE", f"symlink {q(dest)} -> {q(src)}")
-    except Exception as e:
-        log("WARNING", f"cannot symlink {q(dest)}: {e}")
+def rotate_existing_output(path: Path) -> Optional[Path]:
+    return rotate_existing_path(path)
 
 
-def cleanup_stale_part_symlinks(output_path: Path, stem: str, suffix: str, keep: Set[str]) -> None:
-    for path in list(output_path.glob(f"{stem}-part*{suffix}")) + list(
-            output_path.glob(f"{stem}-part*-master{suffix}")
-    ):
-        if path.name in keep:
-            continue
-        if path.is_symlink():
-            path.unlink()
-            log("INFO", f"removed stale part symlink {q(path)}")
-
-def setup_log_files(log_dir: Path) -> None:
+def setup_log_files(output_path: Path) -> None:
     global log_convert, log_errors
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_convert = open(log_dir / "convert.log", "w", encoding="utf-8")
-    log_errors = open(log_dir / "errors.log", "w", encoding="utf-8")
+    output_path.mkdir(parents=True, exist_ok=True)
+    convert_p = output_path / "convert.log"
+    errors_p = output_path / "errors.log"
+    rotate_existing_path(convert_p)
+    rotate_existing_path(errors_p)
+    log_convert = open(convert_p, "w", encoding="utf-8")
+    log_errors = open(errors_p, "w", encoding="utf-8")
 
 
 def close_log_files() -> None:
@@ -667,13 +647,8 @@ def list_attachment_names(msg: Message) -> str:
 def print_email_list(
         messages: List[Message], year: int, selector: str, needle: str = "",
 ) -> None:
-    try:
-        clauses = parse_selector(selector)
-    except ValueError as e:
-        log("ERROR", str(e))
-        sys.exit(1)
+    start, end, sel_norm = parse_selector(selector)
     needle = (needle or "").lower()
-    n = len(messages)
     for i, msg in enumerate(messages, 1):
         if year != -1:
             try:
@@ -681,7 +656,7 @@ def print_email_list(
                     continue
             except Exception:
                 pass
-        if not index_selected(i, n, clauses):
+        if sel_norm != "0" and start and end and not (start <= i <= end):
             continue
         subj = list_field(clean_text(decode_header_value(msg, "Subject", "(no subject)")))
         atts = list_field(list_attachment_names(msg))
@@ -2187,61 +2162,18 @@ def make_pdf_bar_page(layout: Layout, filename: str) -> bytes:
     c.save()
     return buf.getvalue()
 
-CLAUSE_RE = re.compile(r"^(!?)(?:(\d+)-(\d+)|-(\d+)|(\d+)-|(\d+))$")
 
-
-def parse_selector(sel: str) -> List[Tuple[str, int, int]]:
-    sel = (sel or "0").strip()
-    if sel in ("", "0"):
-        return [("inc", 1, 0)]
-    clauses: List[Tuple[str, int, int]] = []
-    for raw in sel.split(";"):
-        piece = raw.strip()
-        if not piece:
-            raise ValueError(f"empty clause in --select-emails {q(sel)}")
-        m = CLAUSE_RE.match(piece)
-        if not m:
-            raise ValueError(f"invalid --select-emails clause {q(piece)}")
-        bang, a, b, open_end_b, open_start_a, single = m.groups()
-        kind = "exc" if bang else "inc"
-        if a and b:
-            start, end = int(a), int(b)
-            if start > end:
-                raise ValueError(f"range start > end in {q(piece)}")
-        elif open_end_b:
-            start, end = 1, int(open_end_b)
-        elif open_start_a:
-            start, end = int(open_start_a), 0
-        else:
-            start = end = int(single)
-        clauses.append((kind, start, end))
-    return clauses
-
-
-def index_selected(i: int, n: int, clauses: List[Tuple[str, int, int]]) -> bool:
-    has_inc = any(k == "inc" for k, _, _ in clauses)
-    selected = not has_inc
-    for kind, start, end in clauses:
-        last = n if end == 0 else end
-        if kind == "inc" and start <= i <= last:
-            selected = True
-    for kind, start, end in clauses:
-        last = n if end == 0 else end
-        if kind == "exc" and start <= i <= last:
-            selected = False
-    return selected
-
-# def parse_selector(sel: str) -> Tuple[int, int, str]:
-#     if re.match(r"^\d+-\d+$", sel):
-#         start, end = map(int, sel.split("-"))
-#         if start > end:
-#             end = start + end
-#         return start, end, str(start)
-#     try:
-#         n = int(sel)
-#         return n, n, sel
-#     except Exception:
-#         return 0, 0, "0"
+def parse_selector(sel: str) -> Tuple[int, int, str]:
+    if re.match(r"^\d+-\d+$", sel):
+        start, end = map(int, sel.split("-"))
+        if start > end:
+            end = start + end
+        return start, end, str(start)
+    try:
+        n = int(sel)
+        return n, n, sel
+    except Exception:
+        return 0, 0, "0"
 
 
 def msg_sort_ts(m: Message) -> float:
@@ -2451,54 +2383,16 @@ def render_one_email(
     return merged_piece
 
 
-def qpdf_check(qpdf: str, path: Path, *, strict: bool = False,
-               expect_pages: Optional[int] = None) -> bool:
-    args = [qpdf, "--check"]
-    if not strict:
-        args.append("--warning-exit-0")
-    args.append(str(path))
+def qpdf_check(qpdf: str, path: Path) -> None:
     log("INFO", f"qpdf --check {q(path)}")
-    rc, out = run_cmd(args, timeout=QPDF_TIMEOUT)
-    snippet = (out or "").strip()
-    if snippet:
-        log("INFO", f"qpdf --check: {snippet[:800]}")
-    if strict:
-        if rc != 0 or re.search(r"(?im)^WARNING:", out or ""):
-            log("WARNING", f"qpdf --check rejected {q(path)}", review=True)
-            return False
-        if expect_pages is not None:
-            rc2, nout = run_cmd([qpdf, "--show-npages", str(path)])
-            try:
-                got = int((nout or "").strip().split()[0])
-            except Exception:
-                got = -1
-            if rc2 != 0 or got != expect_pages:
-                log("WARNING", f"qpdf page count {got} != {expect_pages}", review=True)
-                return False
-        return True
+    rc, out = run_cmd([qpdf, "--check", "--warning-exit-0", str(path)], timeout=QPDF_TIMEOUT)
+    snippet = (out or "").strip()[:800]
     if rc != 0:
-        log("WARNING", f"qpdf --check failed: {snippet[:800]}", review=True)
-        return False
-    return True
-
-
-def qpdf_finalize_file(qpdf: str, src: Path, dest: Path) -> bool:
-    rc, out = run_cmd(
-        [qpdf, "--object-streams=generate", "--min-version=1.7",
-         "--compress-streams=y", "--recompress-flate", str(src), str(dest)],
-        timeout=QPDF_TIMEOUT,
-    )
-    if rc == 2 or not dest.exists() or dest.stat().st_size <= 0:
-        log("WARNING", f"qpdf finalize failed: {(out or '')[:500]}", review=True)
-        return False
-    try:
-        expect = len(PdfReader(str(src)).pages)
-    except Exception:
-        expect = None
-    if not qpdf_check(qpdf, dest, strict=True, expect_pages=expect):
-        log("WARNING", f"qpdf output failed strict --check, not promoting {q(dest)}", review=True)
-        return False
-    return True
+        log("WARNING", f"qpdf --check failed: {snippet}", review=True)
+    elif snippet:
+        log("INFO", f"qpdf --check: {snippet}")
+    else:
+        log("INFO", "qpdf --check ok")
 
 
 def main() -> None:
@@ -2559,29 +2453,15 @@ def main() -> None:
         sys.exit(1)
 
     use_dedup = bool(config.get("use_deduplicated_mbox", False))
-    split_big = bool(config.get("split_big_files_on_limit", False))
-    output_path = Path(config["output_path"])
-    output_filename = config["output_filename"]
 
     if args.list_needle is not None:
-        try:
-            input_paths = resolve_input_mboxes_fast(input_files, use_dedup)
-            all_messages: List[Message] = []
-            for mbox_path in input_paths:
-                all_messages.extend(load_mbox_messages(mbox_path))
-            all_messages.sort(key=msg_sort_ts)
-            print_email_list(all_messages, args.select_year, args.select_emails, args.list_needle)
-            return
-        except Exception as e:
-            rundir = make_rundir(output_path)
-            setup_log_files(rundir)
-            log("ERROR", f"--list-emails failed: {e}")
-            if debug:
-                traceback.print_exc()
-            link_into_root(output_path, rundir, "convert.log")
-            link_into_root(output_path, rundir, "errors.log")
-            close_log_files()
-            sys.exit(1)
+        input_paths = resolve_input_mboxes_fast(input_files, use_dedup)
+        all_messages: List[Message] = []
+        for mbox_path in input_paths:
+            all_messages.extend(load_mbox_messages(mbox_path))
+        all_messages.sort(key=msg_sort_ts)
+        print_email_list(all_messages, args.select_year, args.select_emails, args.list_needle)
+        return
 
     soffice = args.document_converter_binary
     if not Path(soffice).exists() and not shutil.which(soffice):
@@ -2612,8 +2492,11 @@ def main() -> None:
     prefer_plain_text = bool(config.get("prefer_plain_text", True))
     use_montage = str(config.get("use_montages_for_images", True)).lower() in ("1", "true", "yes")
     archive = str(config.get("archive_attachments", False)).lower() in ("1", "true", "yes")
+    output_path = Path(config["output_path"])
+    output_filename = config["output_filename"]
     email_to_name = {k.lower(): v for k, v in (config.get("email_to_name") or {}).items()}
 
+    setup_log_files(output_path)
     layout = make_layout(page_size, image_dpi)
     log("INFO", f"Page {dim} {layout.width:.1f}×{layout.height:.1f} pt, image_dpi={image_dpi}")
     if finalize:
@@ -2641,16 +2524,9 @@ def main() -> None:
     all_messages.sort(key=msg_sort_ts)
     log("INFO", f"Loaded and sorted {len(all_messages)} emails chronologically")
 
-    rundir = make_rundir(output_path)
-    setup_log_files(rundir)
-    archive_root = prepare_archive_root(rundir) if archive else None
+    archive_root = prepare_archive_root(output_path) if archive else None
 
-    try:
-        clauses = parse_selector(args.select_emails)
-    except ValueError as e:
-        log("ERROR", str(e))
-        sys.exit(1)
-    n_all = len(all_messages)
+    start, end, sel_norm = parse_selector(args.select_emails)
     processed: List[ProcessedEmail] = []
     for i, msg in enumerate(all_messages, 1):
         if args.select_year != -1:
@@ -2659,7 +2535,7 @@ def main() -> None:
                     continue
             except Exception:
                 continue
-        if not index_selected(i, n_all, clauses):
+        if sel_norm != "0" and start and end and not (start <= i <= end):
             continue
         processed.append(process_single_message(msg, i, tmp, soffice))
 
@@ -2674,89 +2550,58 @@ def main() -> None:
         set_log_ctx(None)
 
     log("INFO", f"Processing {len(processed)} emails after filtering")
-
+    assembled = output_path / output_filename
+    rotate_existing_output(assembled)
     font_path = base / "Build/assets/fonts/OpenSans-Bold.ttf"
 
-    stem = Path(output_filename).stem
-    suffix = Path(output_filename).suffix or ".pdf"
-    writer = new_pdf_writer()
-    vol_bytes = 0
-    vol_idx = 1
-    pending: List[Path] = []
+    final_writer = new_pdf_writer()
     failed = 0
-
     for email in processed:
         piece = render_one_email(
             email, layout, page_size, tmp, use_montage, gs, archive, archive_root, font_path,
         )
-        # if render_one_email still takes output_path only for archive, change that
-        # call to pass archive_root — see note below
         if piece is None or not piece.exists():
             failed += 1
+            log("ERROR", "email omitted from output PDF")
             continue
-        piece_size = piece.stat().st_size
-        if split_big and vol_bytes > 0 and vol_bytes + piece_size >= SPLIT_LIMIT_BYTES:
-            path = rundir / f"{stem}-part{vol_idx:02d}{suffix}"
-            with open(path, "wb") as f:
-                writer.write(f)
-            pending.append(path)
-            writer = new_pdf_writer()
-            vol_bytes = 0
-            vol_idx += 1
         try:
             for page in PdfReader(str(piece)).pages:
-                writer.add_page(page)
-            vol_bytes += piece_size
+                final_writer.add_page(page)
         except Exception as e:
             failed += 1
             log("ERROR", f"could not append rendered pages: {e}")
+            if debug:
+                traceback.print_exc()
 
-    if split_big and vol_idx > 1:
-        if len(writer.pages):
-            path = rundir / f"{stem}-part{vol_idx:02d}{suffix}"
-            with open(path, "wb") as f:
-                writer.write(f)
-            pending.append(path)
-    else:
-        path = rundir / output_filename
-        with open(path, "wb") as f:
-            writer.write(f)
-        pending = [path]
+    set_log_ctx(None)
+    with open(assembled, "wb") as f:
+        final_writer.write(f)
+    log("INFO", f"Assembled {len(final_writer.pages)} pages ({failed} emails failed)")
 
-    if split_big and len(pending) == 1 and pending[0].name != output_filename:
-        single = rundir / output_filename
-        pending[0].rename(single)
-        pending = [single]
-
-    log("INFO", f"Assembled volumes={len(pending)} ({failed} emails failed)")
-
-    masters: List[Path] = []
+    result = assembled
     if finalize:
-        for assembled in pending:
-            qpdf_tmp = tmp / f"finalized_{assembled.name}"
-            if qpdf_finalize_file(qpdf, assembled, qpdf_tmp):
-                master = assembled.with_name(f"{assembled.stem}-master{assembled.suffix}")
-                shutil.copy2(qpdf_tmp, master)
-                masters.append(master)
-                log("INFO", f"Wrote finalized PDF: {q(master)}")
-            else:
-                log("WARNING", f"qpdf finalize not promoted; left {q(assembled)}", review=True)
-    else:
-        for assembled in pending:
-            qpdf_check(qpdf, assembled)
+        qpdf_tmp = tmp / "finalized.pdf"
+        log("INFO", f"qpdf finalize → {q(qpdf_tmp)}")
+        rc, out = run_cmd(
+            [qpdf, "--object-streams=generate", "--min-version=1.7",
+             "--compress-streams=y", "--recompress-flate",
+             str(assembled), str(qpdf_tmp)],
+            timeout=QPDF_TIMEOUT,
+        )
+        if rc == 0 and qpdf_tmp.exists() and qpdf_tmp.stat().st_size > 0:
+            finalized = assembled.with_name(f"{assembled.stem}-master{assembled.suffix}")
+            rotate_existing_path(finalized)
+            rotate_existing_path(assembled, stamp=mtime_stamp(assembled))
+            shutil.copy2(qpdf_tmp, finalized)
+            result = finalized
+            log("INFO", f"Wrote finalized PDF: {q(finalized)}")
+        else:
+            log("WARNING", f"qpdf finalize failed, assembled file left in place: {out[:500]}", review=True)
 
-    link_into_root(output_path, rundir, "convert.log")
-    link_into_root(output_path, rundir, "errors.log")
-    if archive_root is not None:
-        link_into_root(output_path, rundir, "attachments")
-    keep = {p.name for p in pending + masters}
-    for p in pending + masters:
-        link_into_root(output_path, rundir, p.name)
-    cleanup_stale_part_symlinks(output_path, stem, suffix, keep)
-
-    log("INFO", f"Please delete the temporary directory when you no longer need the intermediate files: {q(tmp)}")
-
+    qpdf_check(qpdf, result)
+    log("INFO", f"The file was saved to: {q(result)}")
     close_log_files()
+
 
 if __name__ == "__main__":
     try:

@@ -1,0 +1,21 @@
+{
+	"input_files": [
+		"imports/data/my.mbox"
+	],
+	"split_big_files_on_limit": false,
+	"duplicate_emails": {
+		"enabled": true,
+		"action": "skip"
+	},
+	"use_deduplicated_mbox": true,
+	"dimensions": "A0",
+	"image_dpi": 300,
+	"prefer_plain_text": true,
+	"output_path": "Anlagen/",
+	"output_filename": "Vollständiger Briefwechsel (high-resolution Master).pdf",
+	"archive_attachments": true,
+	"use_montages_for_images": true,
+	"email_to_name": {
+		"justin@freywald.org": "Justin Freÿwald"
+	}
+}
