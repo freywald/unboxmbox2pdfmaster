@@ -1,5 +1,5 @@
 venv/*
 .venv/*
 __pycache__/
-convert-mbox-to-pdf/bin/archive/*
+bin/archive/*
 
