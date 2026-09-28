@@ -403,20 +403,21 @@ def make_rundir(output_path: Path) -> Path:
 
 
 def link_into_root(output_path: Path, rundir: Path, name: str) -> None:
-	src = rundir / name
-	dest = output_path / name
-	if not src.exists():
-		return
-	if dest.is_symlink():
-		dest.unlink()
-	elif dest.exists():
-		log("WARNING", f"cannot symlink {q(dest)}: real file/dir exists, rundir keeps {q(src)}")
-		return
-	try:
-		dest.symlink_to(src)
-		log("VERBOSE", f"symlink {q(dest)} -> {q(src)}")
-	except Exception as e:
-		log("WARNING", f"cannot symlink {q(dest)}: {e}")
+    src = rundir / name
+    dest = output_path / name
+    if not src.exists():
+        return
+    if dest.is_symlink():
+        dest.unlink()
+    elif dest.exists():
+        log("WARNING", f"cannot symlink {q(dest)}: real file/dir exists, rundir keeps {q(src)}")
+        return
+    target = Path(os.path.relpath(src.resolve(), dest.parent.resolve()))
+    try:
+        dest.symlink_to(target)
+        log("VERBOSE", f"symlink {q(dest)} -> {q(target)}")
+    except Exception as e:
+        log("WARNING", f"cannot symlink {q(dest)}: {e}")
 
 
 def cleanup_stale_part_symlinks(output_path: Path, stem: str, suffix: str, keep: Set[str]) -> None:
