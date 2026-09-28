@@ -434,7 +434,7 @@ def cleanup_stale_part_symlinks(output_path: Path, stem: str, suffix: str, keep:
 def setup_log_files(log_dir: Path) -> None:
 	global log_convert, log_errors
 	log_dir.mkdir(parents=True, exist_ok=True)
-	log_convert = open(log_dir / "convert.log", "w", encoding="utf-8")
+	log_convert = open(log_dir / "output.log", "w", encoding="utf-8")
 	log_errors = open(log_dir / "errors.log", "w", encoding="utf-8")
 
 
@@ -2540,7 +2540,7 @@ def main() -> None:
 			log("ERROR", f"--list-emails failed: {e}")
 			if debug:
 				traceback.print_exc()
-			link_into_root(output_path, rundir, "convert.log")
+			link_into_root(output_path, rundir, "output.log")
 			link_into_root(output_path, rundir, "errors.log")
 			close_log_files()
 			sys.exit(1)
@@ -2700,7 +2700,7 @@ def main() -> None:
 		for assembled in pending:
 			qpdf_check(qpdf, assembled)
 
-	link_into_root(output_path, rundir, "convert.log")
+	link_into_root(output_path, rundir, "output.log")
 	link_into_root(output_path, rundir, "errors.log")
 	if archive_root is not None:
 		link_into_root(output_path, rundir, "attachments")
